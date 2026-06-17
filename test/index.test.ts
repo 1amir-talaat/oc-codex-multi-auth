@@ -238,6 +238,7 @@ vi.mock("../lib/request/rate-limit-backoff.js", () => ({
 				undefined;
 			return code === "deactivated_workspace";
 		}),
+		isInvalidatedAuthTokenError: vi.fn((_errorBody: unknown, status?: number) => status === 401),
 	getUnsupportedCodexModelInfo: vi.fn(() => ({ isUnsupported: false })),
 	resolveUnsupportedCodexFallbackModel: vi.fn(() => undefined),
 	shouldFallbackToGpt52OnUnsupportedGpt53: vi.fn(() => false),

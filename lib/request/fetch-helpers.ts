@@ -20,7 +20,10 @@ import { GPT_55_MODEL_ID } from "./helpers/model-map.js";
 import { convertSseToJson, ensureContentType } from "./response-handler.js";
 import type { OAuthAuthDetails, UserConfig, RequestBody } from "../types.js";
 import { CodexAuthError } from "../errors.js";
-import { DEACTIVATED_WORKSPACE_ERROR_CODE } from "../error-sentinels.js";
+import {
+	DEACTIVATED_WORKSPACE_ERROR_CODE,
+	isInvalidatedAuthTokenMessage,
+} from "../error-sentinels.js";
 import { isRecord } from "../utils.js";
 import {
         CODEX_BASE_URL,
@@ -392,6 +395,61 @@ function getStructuredErrorCode(errorBody: unknown): string | undefined {
 	}
 
 	return undefined;
+}
+
+function getStructuredErrorMessage(errorBody: unknown): string | undefined {
+	if (typeof errorBody === "string") return errorBody.trim() || undefined;
+	if (!isRecord(errorBody)) return undefined;
+
+	const nestedError = errorBody.error;
+	if (isRecord(nestedError) && typeof nestedError.message === "string" && nestedError.message.trim()) {
+		return nestedError.message;
+	}
+
+	const directMessage = errorBody.message;
+	if (typeof directMessage === "string" && directMessage.trim()) return directMessage;
+
+	const detail = errorBody.detail;
+	if (typeof detail === "string" && detail.trim()) return detail;
+	if (isRecord(detail) && typeof detail.message === "string" && detail.message.trim()) {
+		return detail.message;
+	}
+
+	return undefined;
+}
+
+/**
+ * Auth error codes the Codex/OpenAI backend uses for a specifically invalidated
+ * or revoked OAuth token. Kept deliberately narrow: generic codes like
+ * `unauthorized` (permission-denied) or `invalid_api_key` (wrong key) are
+ * excluded so the status-less code/message fallback cannot cool down a healthy
+ * account on a non-token error. HTTP 401 remains the primary signal; these are
+ * only a fallback for paths that carry a structured code but no status. Distinct
+ * from rate limits (429) and entitlement gates (403/`model_not_supported_*`),
+ * which have their own rotation/fallback paths.
+ */
+const INVALIDATED_AUTH_TOKEN_CODE_PATTERN =
+	/^(?:invalid_token|invalid_grant|token_expired|token_revoked)$/i;
+
+/**
+ * Detects the "authentication token invalidated" failure on the *request* path
+ * (as opposed to the token-refresh path in {@link refreshAndUpdateToken}).
+ *
+ * The backend returns HTTP 401 with a body like
+ * "Your authentication token has been invalidated. Please try signing in
+ * again." When the access token presented for a request is rejected, the owning
+ * account must be cooled down and the request rotated to the next healthy
+ * account — otherwise persisted family routing keeps pinning every request to
+ * the dead account slot (issue #171).
+ *
+ * Driven primarily by the HTTP 401 status; the structured code and message are
+ * fallbacks for paths (probe/exception) that only carry an error string.
+ */
+export function isInvalidatedAuthTokenError(errorBody: unknown, status?: number): boolean {
+	if (status === HTTP_STATUS.UNAUTHORIZED) return true;
+	const code = getStructuredErrorCode(errorBody);
+	if (code && INVALIDATED_AUTH_TOKEN_CODE_PATTERN.test(code)) return true;
+	return isInvalidatedAuthTokenMessage(getStructuredErrorMessage(errorBody));
 }
 
 function isServerOverloadedError(errorBody: unknown): boolean {

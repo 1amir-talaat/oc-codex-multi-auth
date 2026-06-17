@@ -144,6 +144,7 @@ import {
         handleErrorResponse,
         handleSuccessResponse,
 	isDeactivatedWorkspaceError,
+	isInvalidatedAuthTokenError,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
         refreshAndUpdateToken,
@@ -155,6 +156,7 @@ import {
 	createDeactivatedWorkspaceError,
 	DEACTIVATED_WORKSPACE_ERROR_CODE,
 	isDeactivatedWorkspaceErrorMessage,
+	isInvalidatedAuthTokenMessage,
 } from "./lib/error-sentinels.js";
 import {
 	applyFastSessionDefaults,
@@ -2629,6 +2631,89 @@ while (attempted.size < Math.max(1, accountCount)) {
 																																}
 																														break;
 																													}
+																													// A 401 token-invalidated response means the access token presented for
+																													// THIS account was rejected by the backend even though the proactive
+																													// refresh above either ran or judged the token still fresh. Without an
+																													// explicit handler the 401 fell straight through to `return errorResponse`
+																													// below, so persisted family routing kept pinning every request to the dead
+																													// account slot instead of failing over (issue #171). Treat it as an
+																													// account-health failure: cool the refresh-token group down (or remove it
+																													// past the failure threshold) and rotate to the next healthy account.
+																													//
+																													// Note: 401s intentionally do NOT feed the circuit breaker — the breaker
+																													// guards against upstream faults (network / 5xx), not client-side auth
+																													// decisions (see the 5xx handler above).
+																													if (isInvalidatedAuthTokenError(errorBody, response.status)) {
+																														const accountLabel = formatAccountLabel(account, account.index, {
+																															maskEmail: maskEmailEnabled,
+																														});
+																														accountManager.refundToken(account, modelFamily, model);
+																														accountManager.recordFailure(account, modelFamily, model);
+																														account.lastSwitchReason = "rotation";
+																														runtimeMetrics.failedRequests++;
+																														runtimeMetrics.accountRotations++;
+																														runtimeMetrics.lastError = `Auth token invalidated on ${accountLabel}`;
+																														runtimeMetrics.lastErrorCategory = "auth-invalidated";
+
+																														const failures = await accountManager.incrementAuthFailures(account);
+																														if (failures >= ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL) {
+																															const removedCount =
+																																accountManager.removeAccountsWithSameRefreshToken(account);
+																															if (removedCount > 0) {
+																																accountManager.saveToDiskDebounced();
+																																await showToast(
+																																	removedCount > 1
+																																		? `Removed ${removedCount} accounts (same refresh token) after ${failures} auth-token failures. Run 'opencode auth login' to re-add.`
+																																		: `Removed ${accountLabel} after ${failures} auth-token failures. Run 'opencode auth login' to re-add.`,
+																																	"error",
+																																	{ duration: toastDurationMs * 2 },
+																																);
+																																// Indices shift after removal; restart traversal with a fresh
+																																// attempted set so no healthy account is skipped.
+																																attempted.clear();
+																																accountCount = accountManager.getAccountCount();
+																																break;
+																															}
+																															logWarn(
+																																`[${PLUGIN_NAME}] Expected grouped account removal after auth-token invalidation, but removed ${removedCount}.`,
+																															);
+																														}
+
+																														// Below the removal threshold (or grouped removal was a no-op): cool the
+																														// account's whole refresh-token group down so selection skips it, then
+																														// rotate to the next healthy account instead of returning the 401.
+																														const cooledCount = accountManager.markAccountsWithRefreshTokenCoolingDown(
+																															account.refreshToken,
+																															ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
+																															"auth-failure",
+																														);
+																														if (cooledCount <= 0) {
+																															accountManager.markAccountCoolingDown(
+																																account,
+																																ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
+																																"auth-failure",
+																															);
+																														}
+																														accountManager.saveToDiskDebounced();
+																														logWarn(
+																															accountCount > 1
+																																? `Auth token invalidated for account ${account.index + 1}. Cooling down and rotating to next account.`
+																																: `Auth token invalidated for account ${account.index + 1}. Cooling down; no other account available.`,
+																														);
+																														if (
+																															accountCount > 1 &&
+																															accountManager.shouldShowAccountToast(account.index, rateLimitToastDebounceMs)
+																														) {
+																															await showToast(
+																																`Account ${account.index + 1} sign-in expired. Switching accounts.`,
+																																"warning",
+																																{ duration: toastDurationMs },
+																															);
+																															accountManager.markToastShown(account.index);
+																														}
+																														break;
+																													}
+
 																													runtimeMetrics.failedRequests++;
 																													runtimeMetrics.lastError = `HTTP ${response.status}`;
 																													runtimeMetrics.lastErrorCategory = "http";
@@ -2708,6 +2793,12 @@ while (attempted.size < Math.max(1, accountCount)) {
 					}
 
 					accountManager.recordSuccess(account, modelFamily, model);
+					// A successful request proves the account's credentials are good
+					// again, so reset the auth-failure counter that a prior 401
+					// token-invalidated response (or refresh failure) may have bumped.
+					// Otherwise stale counts could accumulate across requests and
+					// eventually remove a now-healthy account.
+					accountManager.clearAuthFailures(account);
 					// RC-8: closes a half-open gate or prunes the failure window so a
 					// sequence of successes keeps the breaker healthy.
 					circuitBreaker.recordSuccess();
@@ -3087,6 +3178,17 @@ while (attempted.size < Math.max(1, accountCount)) {
 											if (isDeactivatedWorkspaceError(errorBody, response.status)) {
 												throw createDeactivatedWorkspaceError();
 											}
+											// A 401 here proves the token is invalid even when the body
+											// carries only a generic "Unauthorized" string. The status is
+											// dropped once we throw a plain Error, so normalize to the
+											// canonical message the catch below matches — otherwise a
+											// non-specific 401 would leave a dead routing slot unflagged
+											// for codex-doctor --fix (issue #171).
+											if (isInvalidatedAuthTokenError(errorBody, response.status)) {
+												throw new Error(
+													"Your authentication token has been invalidated. Please try signing in again.",
+												);
+											}
 											throw new Error(message);
 										}
 
@@ -3332,6 +3434,23 @@ while (attempted.size < Math.max(1, accountCount)) {
 													...account,
 													flaggedAt: Date.now(),
 													flaggedReason: "workspace-deactivated",
+													lastError: message,
+												};
+												flaggedUpdates.set(
+													getWorkspaceIdentityKey(flaggedRecord),
+													flaggedRecord,
+												);
+												removeFromActive.add(getWorkspaceIdentityKey(account));
+												flaggedChanged = true;
+											} else if (isInvalidatedAuthTokenMessage(message)) {
+												// The cached access token probed OK locally but the backend
+												// rejected it (401 invalidated). Surface it so `codex-doctor
+												// --fix` repairs the active routing instead of leaving a dead
+												// slot selected (issue #171).
+												const flaggedRecord: FlaggedAccountMetadataV1 = {
+													...account,
+													flaggedAt: Date.now(),
+													flaggedReason: "token-invalid",
 													lastError: message,
 												};
 												flaggedUpdates.set(

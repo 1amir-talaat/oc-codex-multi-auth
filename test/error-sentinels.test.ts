@@ -4,6 +4,7 @@ import {
 	createUsageRequestTimeoutError,
 	DEACTIVATED_WORKSPACE_ERROR_CODE,
 	isDeactivatedWorkspaceErrorMessage,
+	isInvalidatedAuthTokenMessage,
 	isUsageRequestTimeoutMessage,
 	USAGE_REQUEST_TIMEOUT_MESSAGE,
 } from "../lib/error-sentinels.js";
@@ -20,5 +21,33 @@ describe("error sentinels", () => {
 		expect(usageTimeoutError.message).toBe(USAGE_REQUEST_TIMEOUT_MESSAGE);
 		expect(isUsageRequestTimeoutMessage(usageTimeoutError.message)).toBe(true);
 		expect(isUsageRequestTimeoutMessage("request timed out")).toBe(false);
+	});
+
+	it("matches the token-invalidated auth error message (issue #171)", () => {
+		// The exact upstream message, with and without the plugin's appended hint.
+		expect(
+			isInvalidatedAuthTokenMessage(
+				"Your authentication token has been invalidated. Please try signing in again.",
+			),
+		).toBe(true);
+		expect(
+			isInvalidatedAuthTokenMessage(
+				"Your authentication token has been invalidated. Please try signing in again. (run `opencode auth login` if this persists)",
+			),
+		).toBe(true);
+		// The "sign in again" branch requires explicit token/credential context.
+		expect(
+			isInvalidatedAuthTokenMessage("Your auth token is no longer valid, please sign in again."),
+		).toBe(true);
+
+		// Must not match unrelated errors — including a bare "sign in again"
+		// that can come from generic session-expiry / workspace-lock / license
+		// bodies on the status-less probe path.
+		expect(isInvalidatedAuthTokenMessage("Please sign in again")).toBe(false);
+		expect(isInvalidatedAuthTokenMessage("Your session has expired. Please sign in again.")).toBe(false);
+		expect(isInvalidatedAuthTokenMessage("Rate limit exceeded")).toBe(false);
+		expect(isInvalidatedAuthTokenMessage("The server had an error")).toBe(false);
+		expect(isInvalidatedAuthTokenMessage(undefined)).toBe(false);
+		expect(isInvalidatedAuthTokenMessage("")).toBe(false);
 	});
 });

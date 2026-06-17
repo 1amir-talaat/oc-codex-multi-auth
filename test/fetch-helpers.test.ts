@@ -10,6 +10,7 @@ import {
     handleSuccessResponse,
     isEntitlementError,
     isDeactivatedWorkspaceError,
+    isInvalidatedAuthTokenError,
     createEntitlementErrorResponse,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
@@ -1406,6 +1407,60 @@ describe('Fetch Helpers Module', () => {
 			expect(result?.body).toBeDefined();
 			expect(result?.body.model).toBe('gpt-5.1');
 			expect(result?.updatedInit).toBeDefined();
+		});
+	});
+
+	describe('isInvalidatedAuthTokenError (issue #171)', () => {
+		it('treats any HTTP 401 as a token-invalidated auth failure', () => {
+			expect(isInvalidatedAuthTokenError(undefined, 401)).toBe(true);
+			expect(
+				isInvalidatedAuthTokenError(
+					{ error: { message: 'Your authentication token has been invalidated.' } },
+					401,
+				),
+			).toBe(true);
+		});
+
+		it('matches structured auth error codes without a 401 status', () => {
+			expect(isInvalidatedAuthTokenError({ error: { code: 'invalid_token' } })).toBe(true);
+			expect(isInvalidatedAuthTokenError({ error: { type: 'invalid_grant' } })).toBe(true);
+			expect(isInvalidatedAuthTokenError({ code: 'token_expired' })).toBe(true);
+		});
+
+		it('matches the invalidated-token message when only a string body is available', () => {
+			expect(
+				isInvalidatedAuthTokenError(
+					'Your authentication token has been invalidated. Please try signing in again.',
+				),
+			).toBe(true);
+			expect(
+				isInvalidatedAuthTokenError({
+					error: {
+						message:
+							'Your authentication token has been invalidated. Please try signing in again. (run `opencode auth login` if this persists)',
+					},
+				}),
+			).toBe(true);
+		});
+
+		it('does not treat generic permission/wrong-key codes as invalidated tokens (status-less)', () => {
+			// `unauthorized` (permission-denied) and `invalid_api_key` (wrong key)
+			// are excluded so the status-less fallback cannot cool down a healthy
+			// account on a non-token error.
+			expect(isInvalidatedAuthTokenError({ error: { code: 'unauthorized' } })).toBe(false);
+			expect(isInvalidatedAuthTokenError({ error: { code: 'invalid_api_key' } })).toBe(false);
+		});
+
+		it('does not match rate limits, entitlement gates, or server errors', () => {
+			expect(isInvalidatedAuthTokenError({ error: { code: 'rate_limit_exceeded' } }, 429)).toBe(false);
+			expect(
+				isInvalidatedAuthTokenError(
+					{ error: { code: 'model_not_supported_with_chatgpt_account' } },
+					403,
+				),
+			).toBe(false);
+			expect(isInvalidatedAuthTokenError({ error: { message: 'server error' } }, 500)).toBe(false);
+			expect(isInvalidatedAuthTokenError(undefined, undefined)).toBe(false);
 		});
 	});
 });

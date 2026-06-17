@@ -45,6 +45,7 @@ vi.mock("../lib/request/fetch-helpers.js", () => ({
 		return { response };
 	},
 	isDeactivatedWorkspaceError: () => false,
+	isInvalidatedAuthTokenError: (_errorBody: unknown, status?: number) => status === 401,
 	resolveUnsupportedCodexFallbackModel: () => undefined,
 	getUnsupportedCodexModelInfo: () => ({
 		isUnsupported: false,
@@ -95,6 +96,25 @@ vi.mock("../lib/accounts.js", () => {
 		recordRateLimit() {}
 
 		recordFailure() {}
+
+		authFailures = 0;
+
+		async incrementAuthFailures() {
+			this.authFailures += 1;
+			return this.authFailures;
+		}
+
+		clearAuthFailures() {
+			this.authFailures = 0;
+		}
+
+		removeAccountsWithSameRefreshToken() {
+			return 1;
+		}
+
+		markAccountsWithRefreshTokenCoolingDown() {
+			return 1;
+		}
 
 	toAuthDetails() {
 		return {
@@ -358,6 +378,51 @@ describe("OpenAIAuthPlugin rate-limit retry", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 
 		const response = await fetchPromise;
+		expect(response.status).toBe(200);
+	});
+
+	it("fails over to the next account when one returns a 401 token-invalidated error", async () => {
+		const { OpenAIAuthPlugin } = (await import("../index.js")) as any;
+		const client = {
+			tui: { showToast: vi.fn() },
+			auth: { set: vi.fn() },
+		} as any;
+
+		const plugin = await OpenAIAuthPlugin({ client } as any);
+
+		const getAuth = async () => ({
+			type: "oauth" as const,
+			access: "a",
+			refresh: "r",
+			expires: Date.now() + 60_000,
+			multiAccount: true,
+		});
+
+		const sdk = (await (plugin.auth as any).loader(getAuth, { options: {}, models: {} } as any)) as any;
+		const fetchMock = vi.mocked(globalThis.fetch);
+		fetchMock.mockReset();
+		fetchMock
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						error: {
+							message:
+								"Your authentication token has been invalidated. Please try signing in again.",
+						},
+					}),
+					{ status: 401, headers: { "content-type": "application/json" } },
+				),
+			)
+			.mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+		const fetchPromise = sdk.fetch("https://example.com", {});
+
+		await vi.runAllTimersAsync();
+
+		const response = await fetchPromise;
+		// The first account's 401 must trigger rotation to the second account
+		// rather than bubbling the 401 straight back (issue #171).
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(response.status).toBe(200);
 	});
 });
