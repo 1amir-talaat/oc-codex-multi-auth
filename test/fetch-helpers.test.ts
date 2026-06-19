@@ -11,6 +11,7 @@ import {
     isEntitlementError,
     isDeactivatedWorkspaceError,
     isInvalidatedAuthTokenError,
+    createAbortError,
     createEntitlementErrorResponse,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
@@ -1462,5 +1463,59 @@ describe('Fetch Helpers Module', () => {
 			expect(isInvalidatedAuthTokenError({ error: { message: 'server error' } }, 500)).toBe(false);
 			expect(isInvalidatedAuthTokenError(undefined, undefined)).toBe(false);
 		});
+	});
+});
+
+describe("createAbortError (issue #176)", () => {
+	it("returns the Error reason (same instance) but stamps name=AbortError", () => {
+		const reason = new Error("client closed connection");
+		const controller = new AbortController();
+		controller.abort(reason);
+		const err = createAbortError(controller.signal);
+		// Same instance (message/stack preserved)...
+		expect(err).toBe(reason);
+		expect(err.message).toBe("client closed connection");
+		// ...but recognizable as an abort downstream.
+		expect(err.name).toBe("AbortError");
+	});
+
+	it("leaves an existing AbortError-named reason untouched", () => {
+		const reason = new Error("already an abort");
+		reason.name = "AbortError";
+		const controller = new AbortController();
+		controller.abort(reason);
+		const err = createAbortError(controller.signal);
+		expect(err).toBe(reason);
+		expect(err.name).toBe("AbortError");
+		expect(err.message).toBe("already an abort");
+	});
+
+	it("wraps a string reason in a named AbortError", () => {
+		const controller = new AbortController();
+		controller.abort("upstream timeout");
+		const err = createAbortError(controller.signal);
+		expect(err).toBeInstanceOf(Error);
+		expect(err.name).toBe("AbortError");
+		expect(err.message).toBe("upstream timeout");
+	});
+
+	it("propagates the platform AbortError when abort() has no reason", () => {
+		// Node sets signal.reason to a DOMException named AbortError (an Error),
+		// so the helper forwards it rather than synthesizing one.
+		const controller = new AbortController();
+		controller.abort();
+		const err = createAbortError(controller.signal);
+		expect(err.name).toBe("AbortError");
+	});
+
+	it("synthesizes a named AbortError (message Aborted) when reason is absent", () => {
+		const err = createAbortError({ aborted: true } as unknown as AbortSignal);
+		expect(err.name).toBe("AbortError");
+		expect(err.message).toBe("Aborted");
+	});
+
+	it("handles a null/undefined signal", () => {
+		expect(createAbortError(null).name).toBe("AbortError");
+		expect(createAbortError(undefined).message).toBe("Aborted");
 	});
 });
