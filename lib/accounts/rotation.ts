@@ -127,10 +127,18 @@ export class AccountRotation {
 				const isAvailable =
 					!isRateLimitedForFamily(account, family, model) &&
 					!this.state.isAccountCoolingDown(account);
+				// Find the earliest quota reset time for this account
+				const resetTimes = Object.values(account.rateLimitResetTimes);
+				const validResetTimes = resetTimes.filter(
+					(t): t is number => typeof t === "number" && t > Date.now(),
+				);
+				const quotaResetAtMs =
+					validResetTimes.length > 0 ? Math.max(...validResetTimes) : undefined;
 				return {
 					index: account.index,
 					isAvailable,
 					lastUsed: account.lastUsed,
+					quotaResetAtMs,
 				};
 			})
 			.filter((a): a is AccountWithMetrics => a !== null);

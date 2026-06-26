@@ -3083,7 +3083,8 @@ while (attempted.size < Math.max(1, accountCount)) {
 								const isLast = index === total - 1;
 								const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
 								const childPrefix = isLast ? "   " : "\u2502  ";
-								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ${content}`;
+								const newline = isLast ? "" : "\n";
+								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ${content}${newline}`;
 							};
 
 							const formatAccountError = (
@@ -3095,7 +3096,8 @@ while (attempted.size < Math.max(1, accountCount)) {
 								const isLast = index === total - 1;
 								const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
 								const childPrefix = isLast ? "   " : "\u2502  ";
-								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ERROR (${message.slice(0, 120)})`;
+								const newline = isLast ? "" : "\n";
+								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ERROR (${message.slice(0, 120)})${newline}`;
 							};
 
 							const fetchCodexQuotaSnapshot = async (params: {

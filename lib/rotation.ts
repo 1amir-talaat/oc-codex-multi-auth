@@ -321,6 +321,8 @@ export interface AccountWithMetrics {
   index: number;
   isAvailable: boolean;
   lastUsed: number;
+  /** Earliest quota reset timestamp for this account (ms since epoch). Higher = more quota remaining. */
+  quotaResetAtMs?: number;
 }
 
 export interface HybridSelectionConfig {
@@ -330,12 +332,15 @@ export interface HybridSelectionConfig {
   tokenWeight: number;
   /** Weight for freshness/last used (default: 0.1) */
   freshnessWeight: number;
+  /** Weight for quota remaining (higher = prefer accounts with more quota). Default: 10 */
+  quotaWeight: number;
 }
 
 export const DEFAULT_HYBRID_SELECTION_CONFIG: HybridSelectionConfig = {
   healthWeight: 2,
   tokenWeight: 5,
   freshnessWeight: 2.0,
+  quotaWeight: 10,
 };
 
 /**
@@ -391,10 +396,23 @@ export function selectHybridAccount(
     const tokens = tokenTracker.getTokens(account.index, quotaKey);
     const hoursSinceUsed = (now - account.lastUsed) / (1000 * 60 * 60);
 
+    // Quota remaining score: accounts with no rate limit (no reset time) get full score.
+    // Accounts that are rate-limited get a penalty based on how far in the future the reset is.
+    // Higher quotaResetAtMs = further in future = less quota remaining = lower score.
+    let quotaScore = 100; // Default: full quota
+    if (account.quotaResetAtMs && account.quotaResetAtMs > now) {
+      // Account is rate-limited. Score inversely proportional to time until reset.
+      // If reset is in 1 minute, score is low. If reset is in 30 days, score is very low.
+      const hoursUntilReset = (account.quotaResetAtMs - now) / (1000 * 60 * 60);
+      // Clamp to 0-100 range: 0 hours until reset = 100 score, 720 hours (30d) = 0 score
+      quotaScore = Math.max(0, Math.min(100, 100 - (hoursUntilReset / 720) * 100));
+    }
+
     let score =
       health * cfg.healthWeight +
       tokens * cfg.tokenWeight +
-      hoursSinceUsed * cfg.freshnessWeight;
+      hoursSinceUsed * cfg.freshnessWeight +
+      quotaScore * cfg.quotaWeight;
 
     // PID-based offset distributes selection across parallel agents
     if (options.pidOffsetEnabled) {
