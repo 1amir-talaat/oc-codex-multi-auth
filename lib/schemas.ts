@@ -42,6 +42,8 @@ export const PluginConfigSchema = z.object({
 		z.array(z.string().min(1)),
 	).optional(),
 	tokenRefreshSkewMs: z.number().min(0).optional(),
+	refreshQueueMaxConcurrency: z.number().int().min(1).max(20).optional(),
+	refreshQueueMaxEntryAgeMs: z.number().min(30_000).optional(),
 	rateLimitToastDebounceMs: z.number().min(0).optional(),
 	toastDurationMs: z.number().min(1000).optional(),
 	perProjectAccounts: z.boolean().optional(),

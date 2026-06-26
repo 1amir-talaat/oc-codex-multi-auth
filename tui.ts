@@ -19,6 +19,7 @@ import {
 	resolveCodexUsageActiveAccount,
 } from "./lib/codex-usage.js";
 import {
+	formatAccountQuotaLine,
 	formatPromptStatusText,
 	formatQuotaDetailsText,
 	resolveQuotaPromptTone,
@@ -28,9 +29,12 @@ import {
 import {
 	createTuiQuotaSnapshot,
 	getTuiQuotaCachePath,
+	getTuiQuotaMultiCachePath,
 	isTuiQuotaSnapshot,
+	readAllTuiQuotaSnapshots,
 	readTuiQuotaSnapshot,
 	writeTuiQuotaSnapshot,
+	writeTuiQuotaSnapshotToMultiCache,
 	type TuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
 import { loadAccounts } from "./lib/storage.js";
@@ -80,6 +84,9 @@ function writeStoredQuotaStatus(
 		// The prompt status is best-effort; cache write failures should not
 		// affect the OpenCode TUI.
 	}
+	void writeTuiQuotaSnapshotToMultiCache(status, getTuiQuotaMultiCachePath(api.state.path.state)).catch(() => {
+		// Multi-account cache write is best-effort
+	});
 }
 
 function toCompactQuotaStatus(
@@ -285,6 +292,7 @@ function createPromptStatus(
 	const [quota, setQuota] = solid.createSignal<CompactQuotaStatus>({
 		type: "loading",
 	});
+	const [allQuotas, setAllQuotas] = solid.createSignal<CompactQuotaStatus[]>([]);
 	let currentFingerprint: string | undefined;
 	let currentSnapshotRevision: string | undefined;
 	const applyQuota = (next: CompactQuotaStatus): void => {
@@ -298,10 +306,31 @@ function createPromptStatus(
 		}
 		setQuota(next);
 	};
+
+	const refreshAllAccounts = async (): Promise<void> => {
+		try {
+			const storage = await loadAccounts();
+			if (!storage || storage.accounts.length === 0) {
+				setAllQuotas([]);
+				return;
+			}
+
+			const cachePath = getTuiQuotaMultiCachePath(api.state.path.state);
+			const snapshots = await readAllTuiQuotaSnapshots(cachePath);
+			const quotass: CompactQuotaStatus[] = snapshots.map((snapshot) =>
+				toCompactQuotaStatus(snapshot, false)
+			);
+			setAllQuotas(quotass);
+		} catch {
+			setAllQuotas([]);
+		}
+	};
+
 	const refresh = (): void => {
 		void refreshQuotaStatus(api).then(applyQuota, () => {
 			applyQuota({ type: "unavailable" });
 		});
+		void refreshAllAccounts();
 	};
 	let refreshTimeout: ReturnType<typeof setTimeout> | undefined;
 	const scheduleRefresh = (): void => {
@@ -337,6 +366,7 @@ function createPromptStatus(
 			if (!revision || revision === currentSnapshotRevision) return;
 			writeStoredQuotaStatus(api, shared);
 			applyQuota(toCompactQuotaStatus(shared, false));
+			await refreshAllAccounts();
 		})().finally(() => {
 			cachePollInFlight = false;
 		});
@@ -374,34 +404,86 @@ function createPromptStatus(
 		disposeSessionError();
 	});
 
-	const node = solid.createElement("text");
-	solid.spread(
-		node,
-		{
-			get content() {
-				return formatPromptStatusText({
-					quota: quota(),
-					width: api.renderer.width,
-					maskEmail: options.maskEmail,
-				});
+	const box = solid.createElement("box");
+
+	const renderAccountLine = (quotaStatus: CompactQuotaStatus, isActive: boolean): JSX.Element => {
+		const node = solid.createElement("text");
+		solid.spread(
+			node,
+			{
+				get content() {
+					return formatAccountQuotaLine(
+						quotaStatus,
+						isActive,
+						options.maskEmail,
+						Date.now(),
+					) ?? "";
+				},
+				get fg() {
+					const tone = resolveQuotaPromptTone(quotaStatus);
+					if (tone === "danger") return api.theme.current.error;
+					if (tone === "warning" || tone === "stale") {
+						return api.theme.current.warning;
+					}
+					if (tone === "normal") return api.theme.current.success;
+					return api.theme.current.textMuted;
+				},
+				selectable: false,
+				truncate: true,
+				wrapMode: "none",
 			},
-			get fg() {
-				const current = quota();
-				const tone = resolveQuotaPromptTone(current);
-				if (tone === "danger") return api.theme.current.error;
-				if (tone === "warning" || tone === "stale") {
-					return api.theme.current.warning;
-				}
-				if (tone === "normal") return api.theme.current.success;
-				return api.theme.current.textMuted;
+			false,
+		);
+		return node;
+	};
+
+	const currentQuota = quota();
+	const allQuotaStatuses = allQuotas();
+	const activeFingerprint = currentQuota.type === "ready" ? currentQuota.fingerprint : undefined;
+
+	const childElements: JSX.Element[] = [];
+	for (const q of allQuotaStatuses) {
+		const isActive = q.type === "ready" && q.fingerprint === activeFingerprint;
+		childElements.push(renderAccountLine(q, isActive));
+	}
+
+	if (childElements.length === 0) {
+		const node = solid.createElement("text");
+		solid.spread(
+			node,
+			{
+				get content() {
+					return formatPromptStatusText({
+						quota: quota(),
+						width: api.renderer.width,
+						maskEmail: options.maskEmail,
+					});
+				},
+				get fg() {
+					const current = quota();
+					const tone = resolveQuotaPromptTone(current);
+					if (tone === "danger") return api.theme.current.error;
+					if (tone === "warning" || tone === "stale") {
+						return api.theme.current.warning;
+					}
+					if (tone === "normal") return api.theme.current.success;
+					return api.theme.current.textMuted;
+				},
+				selectable: false,
+				truncate: true,
+				wrapMode: "none",
 			},
-			selectable: false,
-			truncate: true,
-			wrapMode: "none",
-		},
-		false,
-	);
-	return node;
+			false,
+		);
+		childElements.push(node);
+	}
+
+	solid.spread(box, { flexDirection: "column" }, false);
+	for (const child of childElements) {
+		solid.spread(box, { children: child }, false);
+	}
+
+	return box;
 }
 
 function showQuotaDetails(

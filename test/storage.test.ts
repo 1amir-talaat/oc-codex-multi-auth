@@ -764,7 +764,7 @@ describe("storage", () => {
     });
 
     it("should enforce MAX_ACCOUNTS during import", async () => {
-      const manyAccounts = Array.from({ length: 21 }, (_, i) => ({
+      const manyAccounts = Array.from({ length: 201 }, (_, i) => ({
         accountId: `acct${i}`,
         refreshToken: `ref${i}`,
         addedAt: Date.now(),

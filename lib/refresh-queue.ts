@@ -11,6 +11,12 @@
 import { refreshAccessToken } from "./auth/auth.js";
 import type { TokenResult } from "./types.js";
 import { createLogger } from "./logger.js";
+import { REFRESH_QUEUE_LIMITS } from "./constants.js";
+import {
+  getRefreshQueueMaxConcurrency,
+  getRefreshQueueMaxEntryAgeMs,
+  loadPluginConfig,
+} from "./config.js";
 
 const log = createLogger("refresh-queue");
 
@@ -31,6 +37,10 @@ export interface RefreshQueueMetrics {
 	exceptions: number;
 	rotated: number;
 	staleEvictions: number;
+	queued: number;
+	maxQueued: number;
+	active: number;
+	maxConcurrency: number;
 	lastDurationMs: number;
 	lastFailureReason: string | null;
 	pending: number;
@@ -46,6 +56,10 @@ function createInitialMetrics(): RefreshQueueMetrics {
 		exceptions: 0,
 		rotated: 0,
 		staleEvictions: 0,
+		queued: 0,
+		maxQueued: 0,
+		active: 0,
+		maxConcurrency: REFRESH_QUEUE_LIMITS.MAX_CONCURRENCY,
 		lastDurationMs: 0,
 		lastFailureReason: null,
 		pending: 0,
@@ -86,6 +100,8 @@ function createInitialMetrics(): RefreshQueueMetrics {
 export class RefreshQueue {
   private pending: Map<string, RefreshEntry> = new Map();
   private metrics: RefreshQueueMetrics = createInitialMetrics();
+  private activeRefreshes = 0;
+  private readonly waiters: Array<() => void> = [];
   
   /**
    * Maps old refresh tokens to new tokens after rotation.
@@ -101,12 +117,21 @@ export class RefreshQueue {
    */
   private readonly maxEntryAgeMs: number;
 
+  /** Maximum number of distinct refresh tokens refreshed concurrently. */
+  private readonly maxConcurrency: number;
+
   /**
    * Create a new RefreshQueue instance.
-   * @param maxEntryAgeMs - Maximum age for pending entries before cleanup (default: 30s)
+   * @param maxEntryAgeMs - Maximum age for pending entries before cleanup (default: 10m)
+   * @param maxConcurrency - Maximum distinct refresh tokens refreshed at once (default: 4)
    */
-  constructor(maxEntryAgeMs: number = 30_000) {
-    this.maxEntryAgeMs = maxEntryAgeMs;
+  constructor(
+    maxEntryAgeMs: number = REFRESH_QUEUE_LIMITS.MAX_ENTRY_AGE_MS,
+    maxConcurrency: number = REFRESH_QUEUE_LIMITS.MAX_CONCURRENCY,
+  ) {
+    this.maxEntryAgeMs = Math.max(1, maxEntryAgeMs);
+    this.maxConcurrency = Math.max(1, Math.floor(maxConcurrency));
+    this.metrics.maxConcurrency = this.maxConcurrency;
   }
 
   /**
@@ -204,6 +229,12 @@ export class RefreshQueue {
    * Execute the actual refresh and log results.
    */
   private async executeRefresh(refreshToken: string): Promise<TokenResult> {
+    const pendingSlot = this.acquireSlot();
+    if (pendingSlot) {
+      await pendingSlot;
+      this.activeRefreshes += 1;
+      this.updateQueueMetrics();
+    }
     const startTime = Date.now();
     log.info("Starting token refresh", { tokenSuffix: refreshToken.slice(-6) });
 
@@ -248,7 +279,38 @@ export class RefreshQueue {
         reason: "network_error",
         message: (error as Error)?.message ?? "Unknown error during refresh",
       };
+    } finally {
+      this.releaseSlot();
     }
+  }
+
+  private acquireSlot(): Promise<void> | undefined {
+    if (this.activeRefreshes < this.maxConcurrency) {
+      this.activeRefreshes += 1;
+      this.updateQueueMetrics();
+      return;
+    }
+
+    this.metrics.queued += 1;
+    this.metrics.maxQueued = Math.max(this.metrics.maxQueued, this.waiters.length + 1);
+    return new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  private releaseSlot(): void {
+    this.activeRefreshes = Math.max(0, this.activeRefreshes - 1);
+    const next = this.waiters.shift();
+    if (next) {
+      next();
+    }
+    this.updateQueueMetrics();
+  }
+
+  private updateQueueMetrics(): void {
+    this.metrics.active = this.activeRefreshes;
+    this.metrics.pending = this.pending.size;
+    this.metrics.maxConcurrency = this.maxConcurrency;
   }
 
   /**
@@ -301,13 +363,18 @@ export class RefreshQueue {
   clear(): void {
     this.pending.clear();
     this.tokenRotationMap.clear();
+    this.waiters.splice(0);
+    this.activeRefreshes = 0;
     this.metrics = createInitialMetrics();
+    this.metrics.maxConcurrency = this.maxConcurrency;
   }
 
   getMetricsSnapshot(): RefreshQueueMetrics {
     return {
       ...this.metrics,
       pending: this.pending.size,
+      active: this.activeRefreshes,
+      maxConcurrency: this.maxConcurrency,
     };
   }
 }
@@ -325,7 +392,11 @@ let refreshQueueInstance: RefreshQueue | null = null;
  */
 export function getRefreshQueue(maxEntryAgeMs?: number): RefreshQueue {
   if (!refreshQueueInstance) {
-    refreshQueueInstance = new RefreshQueue(maxEntryAgeMs);
+    const config = loadPluginConfig();
+    refreshQueueInstance = new RefreshQueue(
+      maxEntryAgeMs ?? getRefreshQueueMaxEntryAgeMs(config),
+      getRefreshQueueMaxConcurrency(config),
+    );
   }
   return refreshQueueInstance;
 }

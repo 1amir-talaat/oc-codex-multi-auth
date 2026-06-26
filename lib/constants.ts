@@ -100,9 +100,17 @@ export const AUTH_LABELS = {
 /** Multi-account configuration */
 export const ACCOUNT_LIMITS = {
 	/** Maximum number of OAuth accounts that can be registered */
-	MAX_ACCOUNTS: 20,
+	MAX_ACCOUNTS: 200,
 	/** Cooldown period (ms) after auth failure before retrying account */
 	AUTH_FAILURE_COOLDOWN_MS: 30_000,
 	/** Number of consecutive auth failures before auto-removing account */
 	MAX_AUTH_FAILURES_BEFORE_REMOVAL: 3,
+} as const;
+
+/** Refresh queue defaults tuned for large account pools. */
+export const REFRESH_QUEUE_LIMITS = {
+	/** Maximum distinct refresh tokens refreshed at the same time. */
+	MAX_CONCURRENCY: 4,
+	/** Pending entries can sit behind a large queue; keep them long enough for 150+ accounts. */
+	MAX_ENTRY_AGE_MS: 10 * 60_000,
 } as const;

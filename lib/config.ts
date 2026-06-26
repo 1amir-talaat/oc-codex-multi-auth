@@ -15,6 +15,7 @@ import {
 	EnvNumberSchema,
 	makeEnvEnumSchema,
 } from "./schemas.js";
+import { REFRESH_QUEUE_LIMITS } from "./constants.js";
 
 const CONFIG_PATH = join(homedir(), ".opencode", "openai-codex-auth-config.json");
 const TUI_COLOR_PROFILES = new Set(["truecolor", "ansi16", "ansi256"]);
@@ -51,6 +52,8 @@ const DEFAULT_CONFIG: PluginConfig = {
 	fallbackToGpt52OnUnsupportedGpt53: true,
 	unsupportedCodexFallbackChain: {},
 	tokenRefreshSkewMs: 60_000,
+	refreshQueueMaxConcurrency: REFRESH_QUEUE_LIMITS.MAX_CONCURRENCY,
+	refreshQueueMaxEntryAgeMs: REFRESH_QUEUE_LIMITS.MAX_ENTRY_AGE_MS,
 	rateLimitToastDebounceMs: 60_000,
 	toastDurationMs: 5_000,
 	perProjectAccounts: true,
@@ -492,6 +495,26 @@ export function getTokenRefreshSkewMs(pluginConfig: PluginConfig): number {
 		pluginConfig.tokenRefreshSkewMs,
 		60_000,
 		{ min: 0 },
+	);
+}
+
+export function getRefreshQueueMaxConcurrency(pluginConfig: PluginConfig): number {
+	return Math.floor(
+		resolveNumberSetting(
+			"CODEX_AUTH_REFRESH_QUEUE_MAX_CONCURRENCY",
+			pluginConfig.refreshQueueMaxConcurrency,
+			REFRESH_QUEUE_LIMITS.MAX_CONCURRENCY,
+			{ min: 1 },
+		),
+	);
+}
+
+export function getRefreshQueueMaxEntryAgeMs(pluginConfig: PluginConfig): number {
+	return resolveNumberSetting(
+		"CODEX_AUTH_REFRESH_QUEUE_MAX_ENTRY_AGE_MS",
+		pluginConfig.refreshQueueMaxEntryAgeMs,
+		REFRESH_QUEUE_LIMITS.MAX_ENTRY_AGE_MS,
+		{ min: 30_000 },
 	);
 }
 

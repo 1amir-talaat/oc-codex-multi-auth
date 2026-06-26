@@ -14,6 +14,7 @@ import { queuedRefresh } from "./refresh-queue.js";
 import { createLogger } from "./logger.js";
 import type { ManagedAccount } from "./accounts.js";
 import type { TokenResult } from "./types.js";
+import { getRefreshQueueMaxConcurrency, loadPluginConfig } from "./config.js";
 
 const log = createLogger("proactive-refresh");
 
@@ -136,6 +137,7 @@ export async function proactiveRefreshAccount(
 export async function refreshExpiringAccounts(
 	accounts: ManagedAccount[],
 	bufferMs: number = DEFAULT_PROACTIVE_BUFFER_MS,
+	maxConcurrency: number = getRefreshQueueMaxConcurrency(loadPluginConfig()),
 ): Promise<Map<number, ProactiveRefreshResult>> {
 	const results = new Map<number, ProactiveRefreshResult>();
 	const accountsToRefresh = accounts.filter((a) =>
@@ -147,10 +149,13 @@ export async function refreshExpiringAccounts(
 		return results;
 	}
 
-	log.info(`Proactively refreshing ${accountsToRefresh.length} account(s)`);
+	const safeMaxConcurrency = Math.max(1, Math.floor(maxConcurrency));
+	log.info("Proactively refreshing account tokens", {
+		total: accountsToRefresh.length,
+		maxConcurrency: safeMaxConcurrency,
+	});
 
-	// Refresh in parallel for efficiency
-	const refreshPromises = accountsToRefresh.map(async (account) => {
+	const refreshOne = async (account: ManagedAccount) => {
 		try {
 			const result = await proactiveRefreshAccount(account, bufferMs);
 			return { index: account.index, result };
@@ -170,9 +175,13 @@ export async function refreshExpiringAccounts(
 				result: exceptionResult,
 			};
 		}
-	});
+	};
 
-	const outcomes = await Promise.all(refreshPromises);
+	const outcomes = await mapWithConcurrency(
+		accountsToRefresh,
+		safeMaxConcurrency,
+		refreshOne,
+	);
 
 	for (const { index, result } of outcomes) {
 		results.set(index, result);
@@ -193,6 +202,31 @@ export async function refreshExpiringAccounts(
 			failed,
 		});
 	}
+
+	return results;
+}
+
+async function mapWithConcurrency<T, R>(
+	items: T[],
+	maxConcurrency: number,
+	mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+	const results: R[] = new Array<R>(items.length);
+	let nextIndex = 0;
+	const workerCount = Math.min(maxConcurrency, items.length);
+
+	await Promise.all(
+		Array.from({ length: workerCount }, async () => {
+			while (nextIndex < items.length) {
+				const currentIndex = nextIndex;
+				nextIndex += 1;
+				const item = items[currentIndex];
+				if (item !== undefined) {
+					results[currentIndex] = await mapper(item);
+				}
+			}
+		}),
+	);
 
 	return results;
 }

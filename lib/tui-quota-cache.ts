@@ -335,3 +335,83 @@ export async function clearTuiQuotaSnapshot(cachePath?: string): Promise<void> {
 		throw error;
 	}
 }
+
+// ============================================================================
+// Multi-account cache support
+// ============================================================================
+
+export type TuiQuotaMultiCache = {
+	version: typeof TUI_QUOTA_CACHE_VERSION;
+	snapshots: Record<string, TuiQuotaSnapshot>;
+};
+
+function isTuiQuotaMultiCache(value: unknown): value is TuiQuotaMultiCache {
+	return (
+		isRecord(value) &&
+		value.version === TUI_QUOTA_CACHE_VERSION &&
+		isRecord(value.snapshots) &&
+		Object.values(value.snapshots).every(isTuiQuotaSnapshot)
+	);
+}
+
+const MULTI_CACHE_FILE = "oc-codex-multi-auth-tui-quota-multi.json";
+
+export function getTuiQuotaMultiCachePath(stateDir?: string): string {
+	const envStateDir = process.env.OPENCODE_STATE_DIR?.trim();
+	return join(stateDir?.trim() || envStateDir || getDefaultOpenCodeStateDir(), MULTI_CACHE_FILE);
+}
+
+export async function readTuiQuotaMultiCache(
+	cachePath?: string,
+): Promise<TuiQuotaMultiCache | undefined> {
+	try {
+		const raw = await fs.readFile(cachePath ?? getTuiQuotaMultiCachePath(), "utf-8");
+		const parsed = JSON.parse(raw) as unknown;
+		return isTuiQuotaMultiCache(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export async function readTuiQuotaSnapshotFromMultiCache(
+	fingerprint: string,
+	cachePath?: string,
+): Promise<TuiQuotaSnapshot | undefined> {
+	const cache = await readTuiQuotaMultiCache(cachePath);
+	return cache?.snapshots[fingerprint];
+}
+
+export async function writeTuiQuotaSnapshotToMultiCache(
+	snapshot: TuiQuotaSnapshot,
+	cachePath?: string,
+): Promise<void> {
+	const target = cachePath ?? getTuiQuotaMultiCachePath();
+	const existing = await readTuiQuotaMultiCache(target);
+	const snapshots = existing?.snapshots ?? {};
+	snapshots[snapshot.fingerprint] = snapshot;
+
+	const multiCache: TuiQuotaMultiCache = {
+		version: TUI_QUOTA_CACHE_VERSION,
+		snapshots,
+	};
+
+	const temporary = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+	await fs.mkdir(dirname(target), { recursive: true });
+	await fs.writeFile(temporary, `${JSON.stringify(multiCache, null, 2)}\n`, {
+		encoding: "utf-8",
+		mode: 0o600,
+	});
+	await renameWithWindowsRetry(temporary, target);
+}
+
+export async function readAllTuiQuotaSnapshots(
+	cachePath?: string,
+): Promise<TuiQuotaSnapshot[]> {
+	const cache = await readTuiQuotaMultiCache(cachePath);
+	if (!cache) return [];
+	return Object.values(cache.snapshots).sort((a, b) => {
+		const indexA = a.accountIndex ?? 0;
+		const indexB = b.accountIndex ?? 0;
+		return indexA - indexB;
+	});
+}

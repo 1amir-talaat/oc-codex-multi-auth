@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Raised the managed OAuth account cap to 200 and added bounded refresh-queue controls for large pools: `refreshQueueMaxConcurrency` / `CODEX_AUTH_REFRESH_QUEUE_MAX_CONCURRENCY` and `refreshQueueMaxEntryAgeMs` / `CODEX_AUTH_REFRESH_QUEUE_MAX_ENTRY_AGE_MS`. Distinct-token refreshes now drain through a conservative worker queue instead of stampeding the OAuth token endpoint when 150+ accounts are present.
+
 ### Fixed
 - `codex-doctor --fix` now clears stale account-health state on accounts whose token refresh succeeds during the repair: an `auth-failure`/`network-error` cooldown and any `rateLimitResetTimes` markers are removed once the refresh proves the credential is alive. Previously `--fix` refreshed the token and tried to switch to the healthiest account, but left the stale cooldown/rate-limit state in place, so no account was eligible and the dead routing persisted — the only recovery was hand-editing `oc-codex-multi-auth-accounts.json`. The stale TUI quota cache is also cleared so diagnostics no longer reference an account index/count that no longer matches the pool. (fixes #171)
 - `codex-doctor` now surfaces a finding when a disabled `accountIdSource: "token"` entry shadows an enabled, org-backed account that shares its email (a leftover a fresh re-login can mint instead of updating the org account). It is flagged with a `codex-remove` hint rather than auto-removed, because the only link between the two records is email and email-only merges must not collapse distinct multi-org accounts (#64). (#171)

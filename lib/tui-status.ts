@@ -59,6 +59,9 @@ const DANGER_LIMIT_LEFT_PERCENT = 10;
 const MASKED_EMAIL = "*****";
 const EMAIL_PATTERN = /[^\s(),<>]+@[^\s(),<>]+/;
 const EMAIL_PATTERN_GLOBAL = /[^\s(),<>]+@[^\s(),<>]+/g;
+const PROGRESS_BAR_WIDTH = 20;
+const PROGRESS_FILLED = "█";
+const PROGRESS_EMPTY = "░";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -397,6 +400,13 @@ function formatResetTime(resetAtMs: number | undefined): string | undefined {
 	});
 }
 
+function formatProgressBar(leftPercent: number | null, width: number = PROGRESS_BAR_WIDTH): string {
+	if (leftPercent === null) return "░".repeat(width);
+	const filled = Math.round((leftPercent / 100) * width);
+	const empty = width - filled;
+	return PROGRESS_FILLED.repeat(filled) + PROGRESS_EMPTY.repeat(empty);
+}
+
 function formatUpdatedAge(fetchedAt: number | undefined, now: number): string {
 	if (!fetchedAt || !Number.isFinite(fetchedAt)) return "unknown";
 	const ageMs = Math.max(0, now - fetchedAt);
@@ -407,6 +417,30 @@ function formatUpdatedAge(fetchedAt: number | undefined, now: number): string {
 	if (hours < 24) return `${hours}h ago`;
 	const days = Math.floor(hours / 24);
 	return `${days}d ago`;
+}
+
+export function formatAccountQuotaLine(
+	quota: CompactQuotaStatus,
+	isActive: boolean,
+	maskEmail: boolean,
+	_now: number,
+): string | undefined {
+	if (quota.type !== "ready") return undefined;
+
+	const email = formatAccountEmail(quota.accountEmail, maskEmail) ??
+		formatAccountEmail(extractEmailFromLabel(quota.accountLabel), maskEmail);
+	const label = email ?? `A${quota.accountIndex ?? "?"}`;
+	const connector = isActive ? "└─" : "├─";
+
+	const primary = quota.limits[0];
+	const leftPercent = primary?.leftPercent ?? null;
+	const progressBar = formatProgressBar(leftPercent);
+
+	const percentStr = leftPercent !== null ? `${leftPercent}%` : "?%";
+	const resetStr = formatResetTime(primary?.resetAtMs);
+	const resetPart = resetStr ? ` (resets ${resetStr})` : "";
+
+	return `${connector} ${label}  ${progressBar} ${percentStr}${resetPart}`;
 }
 
 function formatDetailsLimit(limit: CompactQuotaLimit): string {

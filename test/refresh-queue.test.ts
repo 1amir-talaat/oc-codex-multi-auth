@@ -135,6 +135,47 @@ describe("RefreshQueue", () => {
       expect(authModule.refreshAccessToken).toHaveBeenCalledWith("token-3");
     });
 
+    it("should cap concurrent refreshes for different tokens", async () => {
+      const resolvers: Array<() => void> = [];
+      vi.mocked(authModule.refreshAccessToken).mockImplementation(() => {
+        return new Promise((resolve) => {
+          resolvers.push(() => resolve({
+            type: "success",
+            access: "access",
+            refresh: "refresh",
+            expires: Date.now() + 3600000,
+          }));
+        });
+      });
+
+      const queue = new RefreshQueue(60_000, 2);
+      const refreshes = [
+        queue.refresh("token-1"),
+        queue.refresh("token-2"),
+        queue.refresh("token-3"),
+        queue.refresh("token-4"),
+      ];
+
+      expect(authModule.refreshAccessToken).toHaveBeenCalledTimes(2);
+      expect(queue.getMetricsSnapshot().active).toBe(2);
+      expect(queue.getMetricsSnapshot().queued).toBe(2);
+
+      resolvers[0]!();
+      await vi.waitFor(() => {
+        expect(authModule.refreshAccessToken).toHaveBeenCalledTimes(3);
+      });
+      resolvers[1]!();
+      await vi.waitFor(() => {
+        expect(authModule.refreshAccessToken).toHaveBeenCalledTimes(4);
+      });
+      resolvers[2]!();
+      resolvers[3]!();
+
+      await Promise.all(refreshes);
+      expect(queue.getMetricsSnapshot().active).toBe(0);
+      expect(queue.getMetricsSnapshot().maxConcurrency).toBe(2);
+    });
+
     it("should allow new refresh after previous completes", async () => {
       const mockResult = {
         type: "success" as const,

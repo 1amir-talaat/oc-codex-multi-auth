@@ -180,6 +180,8 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `sessionRecovery` | `true` | auto-recover from common api errors |
 | `autoResume` | `true` | auto-resume after thinking block recovery |
 | `tokenRefreshSkewMs` | `60000` | refresh tokens this many ms before expiry |
+| `refreshQueueMaxConcurrency` | `4` | max distinct OAuth refresh tokens refreshed concurrently; keep low for 150+ accounts to avoid token-endpoint bursts |
+| `refreshQueueMaxEntryAgeMs` | `600000` | max age for a pending refresh entry; long enough for large account pools queued behind concurrency limits |
 | `rateLimitToastDebounceMs` | `60000` | debounce rate limit toasts |
 | `fetchTimeoutMs` | `60000` | upstream fetch timeout in ms |
 | `streamStallTimeoutMs` | `45000` | max time to wait for next SSE chunk before aborting |
@@ -265,6 +267,8 @@ override any config with env vars:
 | `CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK=1` | disable automatic `gpt-5.5 -> gpt-5.4` fallback during rollout |
 | `CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1` | disable automatic canonical Codex/GPT-5.4-family fallback |
 | `CODEX_AUTH_ACCOUNT_ID=acc_xxx` | force specific workspace id |
+| `CODEX_AUTH_REFRESH_QUEUE_MAX_CONCURRENCY=4` | cap concurrent distinct OAuth token refreshes for large account pools |
+| `CODEX_AUTH_REFRESH_QUEUE_MAX_ENTRY_AGE_MS=600000` | keep pending refresh entries long enough while large pools drain |
 | `CODEX_AUTH_FETCH_TIMEOUT_MS=120000` | override fetch timeout |
 | `CODEX_AUTH_STREAM_STALL_TIMEOUT_MS=60000` | override SSE stall timeout |
 
