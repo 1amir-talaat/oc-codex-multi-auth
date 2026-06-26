@@ -3074,29 +3074,25 @@ while (attempted.size < Math.max(1, accountCount)) {
 							};
 
 							const formatCodexQuotaLine = (snapshot: CodexQuotaSnapshot): string => {
-								const summarizeWindow = (label: string, window: CodexQuotaWindow): string => {
+								const summarizeWindowWithBar = (label: string, window: CodexQuotaWindow): string => {
 									const used = window.usedPercent;
 									const left =
 										typeof used === "number" && Number.isFinite(used)
 											? Math.max(0, Math.min(100, Math.round(100 - used)))
 											: undefined;
 									const reset = formatResetAt(window.resetAtMs);
-									let summary = label;
-									if (left !== undefined) summary = `${summary} ${left}% left`;
-									if (reset) summary = `${summary} (resets ${reset})`;
-									return summary;
+									const barWidth = 20;
+									const filled = left !== null && left !== undefined ? Math.round((left / 100) * barWidth) : 0;
+									const empty = barWidth - filled;
+									const bar = "\u2588".repeat(filled) + "\u2591".repeat(empty);
+									const pct = left !== null && left !== undefined ? `${left}%` : "?%";
+									const resetPart = reset ? ` (resets ${reset})` : "";
+									return `${bar} ${pct}${resetPart}`;
 								};
 
 								const primaryLabel = formatQuotaWindowLabel(snapshot.primary.windowMinutes);
-								const secondaryLabel = formatQuotaWindowLabel(snapshot.secondary.windowMinutes);
-								const parts = [
-									summarizeWindow(primaryLabel, snapshot.primary),
-									summarizeWindow(secondaryLabel, snapshot.secondary),
-								];
-								if (snapshot.planType) parts.push(`plan:${snapshot.planType}`);
-								if (typeof snapshot.activeLimit === "number" && Number.isFinite(snapshot.activeLimit)) {
-									parts.push(`active:${snapshot.activeLimit}`);
-								}
+								const primaryBar = summarizeWindowWithBar(primaryLabel, snapshot.primary);
+								const parts = [primaryBar];
 								if (snapshot.status === 429) parts.push("rate-limited");
 								return parts.join(", ");
 							};
@@ -3245,8 +3241,8 @@ while (attempted.size < Math.max(1, accountCount)) {
 									const account = workingStorage.accounts[i];
 									if (!account) continue;
 									const label =
-										account.accountLabel?.trim() ||
 										resolveDisplayEmail(account.email, maskEmailEnabled) ||
+										account.accountLabel?.trim() ||
 										`Account ${i + 1}`;
 									if (account.enabled === false) {
 										disabled += 1;
@@ -3567,8 +3563,8 @@ while (attempted.size < Math.max(1, accountCount)) {
 									const flagged = flaggedStorage.accounts[i];
 									if (!flagged) continue;
 									const label =
-										flagged.accountLabel?.trim() ||
 										resolveDisplayEmail(flagged.email, maskEmailEnabled) ||
+										flagged.accountLabel?.trim() ||
 										`Flagged ${i + 1}`;
 									if (flagged.flaggedReason === "workspace-deactivated") {
 										console.log(

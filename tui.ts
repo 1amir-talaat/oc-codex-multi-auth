@@ -327,10 +327,13 @@ function createPromptStatus(
 	};
 
 	const refresh = (): void => {
-		void refreshQuotaStatus(api).then(applyQuota, () => {
+		void refreshQuotaStatus(api).then((next) => {
+			applyQuota(next);
+			void refreshAllAccounts();
+		}, () => {
 			applyQuota({ type: "unavailable" });
+			void refreshAllAccounts();
 		});
-		void refreshAllAccounts();
 	};
 	let refreshTimeout: ReturnType<typeof setTimeout> | undefined;
 	const scheduleRefresh = (): void => {
