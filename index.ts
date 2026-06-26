@@ -3042,59 +3042,60 @@ while (attempted.size < Math.max(1, accountCount)) {
 								return { status, planType, activeLimit, primary, secondary };
 							};
 
-							const formatQuotaWindowLabel = (windowMinutes: number | undefined): string => {
-								if (!windowMinutes || !Number.isFinite(windowMinutes) || windowMinutes <= 0) {
-									return "quota";
-								}
-								if (windowMinutes % 1440 === 0) return `${windowMinutes / 1440}d`;
-								if (windowMinutes % 60 === 0) return `${windowMinutes / 60}h`;
-								return `${windowMinutes}m`;
-							};
-
-							const formatResetAt = (resetAtMs: number | undefined): string | undefined => {
+							const formatResetIn = (resetAtMs: number | undefined): string | undefined => {
 								if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) return undefined;
-								const date = new Date(resetAtMs);
-								if (!Number.isFinite(date.getTime())) return undefined;
-
-								const now = new Date();
-								const sameDay =
-									now.getFullYear() === date.getFullYear() &&
-									now.getMonth() === date.getMonth() &&
-									now.getDate() === date.getDate();
-
-								const time = date.toLocaleTimeString(undefined, {
-									hour: "2-digit",
-									minute: "2-digit",
-									hour12: false,
-								});
-
-								if (sameDay) return time;
-								const day = date.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
-								return `${time} on ${day}`;
+								const now = Date.now();
+								const diffMs = resetAtMs - now;
+								if (diffMs <= 0) return "now";
+								const diffMin = Math.floor(diffMs / 60000);
+								const days = Math.floor(diffMin / 1440);
+								const hours = Math.floor((diffMin % 1440) / 60);
+								const mins = diffMin % 60;
+								if (days > 0) return `${days}d ${hours}h`;
+								if (hours > 0) return `${hours}h ${mins}m`;
+								return `${mins}m`;
 							};
 
 							const formatCodexQuotaLine = (snapshot: CodexQuotaSnapshot): string => {
-								const summarizeWindowWithBar = (label: string, window: CodexQuotaWindow): string => {
-									const used = window.usedPercent;
-									const left =
-										typeof used === "number" && Number.isFinite(used)
-											? Math.max(0, Math.min(100, Math.round(100 - used)))
-											: undefined;
-									const reset = formatResetAt(window.resetAtMs);
-									const barWidth = 20;
-									const filled = left !== null && left !== undefined ? Math.round((left / 100) * barWidth) : 0;
-									const empty = barWidth - filled;
-									const bar = "\u2588".repeat(filled) + "\u2591".repeat(empty);
-									const pct = left !== null && left !== undefined ? `${left}%` : "?%";
-									const resetPart = reset ? ` (resets ${reset})` : "";
-									return `${bar} ${pct}${resetPart}`;
-								};
-
-								const primaryLabel = formatQuotaWindowLabel(snapshot.primary.windowMinutes);
-								const primaryBar = summarizeWindowWithBar(primaryLabel, snapshot.primary);
-								const parts = [primaryBar];
+								const barWidth = 20;
+								const used = snapshot.primary.usedPercent;
+								const left =
+									typeof used === "number" && Number.isFinite(used)
+										? Math.max(0, Math.min(100, Math.round(100 - used)))
+										: undefined;
+								const filled = left !== null && left !== undefined ? Math.round((left / 100) * barWidth) : 0;
+								const empty = barWidth - filled;
+								const bar = "\u2588".repeat(filled) + "\u2591".repeat(empty);
+								const pct = left !== null && left !== undefined ? `${left}%` : "?%";
+								const resetIn = formatResetIn(snapshot.primary.resetAtMs);
+								const resetPart = resetIn ? ` (resets in ${resetIn})` : "";
+								const parts = [`${bar} ${pct}${resetPart}`];
 								if (snapshot.status === 429) parts.push("rate-limited");
 								return parts.join(", ");
+							};
+
+							const formatAccountOutput = (
+								index: number,
+								total: number,
+								label: string,
+								content: string,
+							): string => {
+								const isLast = index === total - 1;
+								const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
+								const childPrefix = isLast ? "   " : "\u2502  ";
+								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ${content}`;
+							};
+
+							const formatAccountError = (
+								index: number,
+								total: number,
+								label: string,
+								message: string,
+							): string => {
+								const isLast = index === total - 1;
+								const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
+								const childPrefix = isLast ? "   " : "\u2502  ";
+								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ERROR (${message.slice(0, 120)})`;
 							};
 
 							const fetchCodexQuotaSnapshot = async (params: {
@@ -3246,7 +3247,7 @@ while (attempted.size < Math.max(1, accountCount)) {
 										`Account ${i + 1}`;
 									if (account.enabled === false) {
 										disabled += 1;
-										console.log(`[${i + 1}/${total}] ${label}: DISABLED`);
+										console.log(formatAccountOutput(i, total, label, "DISABLED"));
 										continue;
 									}
 
@@ -3401,7 +3402,7 @@ while (attempted.size < Math.max(1, accountCount)) {
 												tokenAccountId
 													? `${authDetail} (id:${tokenAccountId.slice(-6)})`
 													: authDetail;
-											console.log(`[${i + 1}/${total}] ${label}: ${detail}`);
+											console.log(formatAccountOutput(i, total, label, detail));
 											continue;
 										}
 
@@ -3426,7 +3427,7 @@ while (attempted.size < Math.max(1, accountCount)) {
 											});
 											ok += 1;
 											console.log(
-												`[${i + 1}/${total}] ${label}: ${formatCodexQuotaLine(snapshot)}`,
+												formatAccountOutput(i, total, label, formatCodexQuotaLine(snapshot)),
 											);
 										} catch (error) {
 											errors += 1;
@@ -3463,13 +3464,13 @@ while (attempted.size < Math.max(1, accountCount)) {
 												flaggedChanged = true;
 											}
 											console.log(
-												`[${i + 1}/${total}] ${label}: ERROR (${message.slice(0, 160)})`,
+												formatAccountError(i, total, label, message),
 											);
 										}
 									} catch (error) {
 										errors += 1;
 										const message = error instanceof Error ? error.message : String(error);
-										console.log(`[${i + 1}/${total}] ${label}: ERROR (${message.slice(0, 120)})`);
+										console.log(formatAccountError(i, total, label, message));
 									}
 								}
 
@@ -3567,8 +3568,12 @@ while (attempted.size < Math.max(1, accountCount)) {
 										flagged.accountLabel?.trim() ||
 										`Flagged ${i + 1}`;
 									if (flagged.flaggedReason === "workspace-deactivated") {
+										const flaggedTotal = flaggedStorage.accounts.length;
+										const isLast = i === flaggedTotal - 1;
+										const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
+										const childPrefix = isLast ? "   " : "\u2502  ";
 										console.log(
-											`[${i + 1}/${flaggedStorage.accounts.length}] ${label}: STILL FLAGGED (workspace deactivated)`,
+											`${connector} ${label}\n${childPrefix}\u2514\u2500 STILL FLAGGED (workspace deactivated)`,
 										);
 										remaining.push(flagged);
 										continue;
@@ -3602,16 +3607,24 @@ while (attempted.size < Math.max(1, accountCount)) {
 											},
 										);
 										restored.push(...resolved.variantsForPersistence);
+										const flaggedTotal2 = flaggedStorage.accounts.length;
+										const isLast2 = i === flaggedTotal2 - 1;
+										const conn2 = isLast2 ? "\u2514\u2500" : "\u251c\u2500";
+										const pre2 = isLast2 ? "   " : "\u2502  ";
 										console.log(
-												`[${i + 1}/${flaggedStorage.accounts.length}] ${label}: RESTORED (Codex CLI cache)`,
+												`${conn2} ${label}\n${pre2}\u2514\u2500 RESTORED (Codex CLI cache)`,
 										);
 											continue;
 										}
 
 										const refreshResult = await queuedRefresh(flagged.refreshToken);
 										if (refreshResult.type !== "success") {
+											const flaggedTotal3 = flaggedStorage.accounts.length;
+											const isLast3 = i === flaggedTotal3 - 1;
+											const conn3 = isLast3 ? "\u2514\u2500" : "\u251c\u2500";
+											const pre3 = isLast3 ? "   " : "\u2502  ";
 											console.log(
-												`[${i + 1}/${flaggedStorage.accounts.length}] ${label}: STILL FLAGGED (${refreshResult.message ?? refreshResult.reason ?? "refresh failed"})`,
+												`${conn3} ${label}\n${pre3}\u2514\u2500 STILL FLAGGED (${refreshResult.message ?? refreshResult.reason ?? "refresh failed"})`,
 											);
 											remaining.push(flagged);
 											continue;
@@ -3627,11 +3640,19 @@ while (attempted.size < Math.max(1, accountCount)) {
 										},
 									);
 									restored.push(...resolved.variantsForPersistence);
-									console.log(`[${i + 1}/${flaggedStorage.accounts.length}] ${label}: RESTORED`);
+									const flaggedTotal4 = flaggedStorage.accounts.length;
+									const isLast4 = i === flaggedTotal4 - 1;
+									const conn4 = isLast4 ? "\u2514\u2500" : "\u251c\u2500";
+									const pre4 = isLast4 ? "   " : "\u2502  ";
+									console.log(`${conn4} ${label}\n${pre4}\u2514\u2500 RESTORED`);
 									} catch (error) {
 										const message = error instanceof Error ? error.message : String(error);
+										const flaggedTotal5 = flaggedStorage.accounts.length;
+										const isLast5 = i === flaggedTotal5 - 1;
+										const conn5 = isLast5 ? "\u2514\u2500" : "\u251c\u2500";
+										const pre5 = isLast5 ? "   " : "\u2502  ";
 										console.log(
-											`[${i + 1}/${flaggedStorage.accounts.length}] ${label}: ERROR (${message.slice(0, 120)})`,
+											`${conn5} ${label}\n${pre5}\u2514\u2500 ERROR (${message.slice(0, 120)})`,
 										);
 										remaining.push({
 											...flagged,
