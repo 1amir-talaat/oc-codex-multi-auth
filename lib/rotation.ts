@@ -396,16 +396,17 @@ export function selectHybridAccount(
     const tokens = tokenTracker.getTokens(account.index, quotaKey);
     const hoursSinceUsed = (now - account.lastUsed) / (1000 * 60 * 60);
 
-    // Quota remaining score: accounts with no rate limit (no reset time) get full score.
-    // Accounts that are rate-limited get a penalty based on how far in the future the reset is.
-    // Higher quotaResetAtMs = further in future = less quota remaining = lower score.
-    let quotaScore = 100; // Default: full quota
+    // Quota reset score: prefer accounts that reset SOONEST (will have quota available first).
+    // Lower quotaResetAtMs = resets sooner = higher priority.
+    let quotaScore = 0; // Default: no reset time = lowest priority (unknown)
     if (account.quotaResetAtMs && account.quotaResetAtMs > now) {
-      // Account is rate-limited. Score inversely proportional to time until reset.
-      // If reset is in 1 minute, score is low. If reset is in 30 days, score is very low.
       const hoursUntilReset = (account.quotaResetAtMs - now) / (1000 * 60 * 60);
-      // Clamp to 0-100 range: 0 hours until reset = 100 score, 720 hours (30d) = 0 score
+      // Invert: fewer hours until reset = higher score
+      // 0 hours = 100 score, 720 hours (30d) = 0 score
       quotaScore = Math.max(0, Math.min(100, 100 - (hoursUntilReset / 720) * 100));
+    } else {
+      // No rate limit active = already available, give full score
+      quotaScore = 100;
     }
 
     let score =
