@@ -3042,6 +3042,17 @@ while (attempted.size < Math.max(1, accountCount)) {
 								return { status, planType, activeLimit, primary, secondary };
 							};
 
+							const ANSI = {
+								reset: "\x1b[0m",
+								bold: "\x1b[1m",
+								red: "\x1b[31m",
+								green: "\x1b[32m",
+								yellow: "\x1b[33m",
+								cyan: "\x1b[36m",
+								white: "\x1b[37m",
+								gray: "\x1b[90m",
+							};
+
 							const formatResetIn = (resetAtMs: number | undefined): string | undefined => {
 								if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) return undefined;
 								const now = Date.now();
@@ -3056,6 +3067,14 @@ while (attempted.size < Math.max(1, accountCount)) {
 								return `${mins}m`;
 							};
 
+							const quotaColor = (leftPercent: number | undefined, isRateLimited: boolean): string => {
+								if (isRateLimited) return ANSI.red;
+								if (leftPercent === undefined) return ANSI.white;
+								if (leftPercent < 10) return ANSI.red;
+								if (leftPercent < 25) return ANSI.yellow;
+								return ANSI.green;
+							};
+
 							const formatCodexQuotaLine = (snapshot: CodexQuotaSnapshot): string => {
 								const barWidth = 20;
 								const used = snapshot.primary.usedPercent;
@@ -3065,13 +3084,14 @@ while (attempted.size < Math.max(1, accountCount)) {
 										: undefined;
 								const filled = left !== null && left !== undefined ? Math.round((left / 100) * barWidth) : 0;
 								const empty = barWidth - filled;
-								const bar = "\u2588".repeat(filled) + "\u2591".repeat(empty);
+								const isRateLimited = snapshot.status === 429;
+								const color = quotaColor(left, isRateLimited);
+								const bar = `${color}${"\u2588".repeat(filled)}${ANSI.gray}${"\u2591".repeat(empty)}${ANSI.reset}`;
 								const pct = left !== null && left !== undefined ? `${left}%` : "?%";
 								const resetIn = formatResetIn(snapshot.primary.resetAtMs);
 								const resetPart = resetIn ? ` (resets in ${resetIn})` : "";
-								const parts = [`${bar} ${pct}${resetPart}`];
-								if (snapshot.status === 429) parts.push("rate-limited");
-								return parts.join(", ");
+								const statusTag = isRateLimited ? ` ${ANSI.red}${ANSI.bold}rate-limited${ANSI.reset}` : "";
+								return `${bar} ${color}${pct}${ANSI.reset}${resetPart}${statusTag}`;
 							};
 
 							const formatAccountOutput = (
@@ -3081,10 +3101,10 @@ while (attempted.size < Math.max(1, accountCount)) {
 								content: string,
 							): string => {
 								const isLast = index === total - 1;
-								const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
-								const childPrefix = isLast ? "   " : "\u2502  ";
-								const newline = isLast ? "" : "\n";
-								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ${content}${newline}`;
+								const connector = isLast ? `${ANSI.gray}\u2514\u2500${ANSI.reset}` : `${ANSI.gray}\u251c\u2500${ANSI.reset}`;
+								const childPrefix = isLast ? "   " : `${ANSI.gray}\u2502${ANSI.reset}  `;
+							 const newline = isLast ? "" : "\n";
+								return `${connector} ${ANSI.cyan}${ANSI.bold}${label}${ANSI.reset}\n${childPrefix}${ANSI.gray}\u2514\u2500${ANSI.reset} ${content}${newline}`;
 							};
 
 							const formatAccountError = (
@@ -3094,10 +3114,10 @@ while (attempted.size < Math.max(1, accountCount)) {
 								message: string,
 							): string => {
 								const isLast = index === total - 1;
-								const connector = isLast ? "\u2514\u2500" : "\u251c\u2500";
-								const childPrefix = isLast ? "   " : "\u2502  ";
+								const connector = isLast ? `${ANSI.gray}\u2514\u2500${ANSI.reset}` : `${ANSI.gray}\u251c\u2500${ANSI.reset}`;
+								const childPrefix = isLast ? "   " : `${ANSI.gray}\u2502${ANSI.reset}  `;
 								const newline = isLast ? "" : "\n";
-								return `${connector} ${label}\n${childPrefix}\u2514\u2500 ERROR (${message.slice(0, 120)})${newline}`;
+								return `${connector} ${ANSI.cyan}${ANSI.bold}${label}${ANSI.reset}\n${childPrefix}${ANSI.gray}\u2514\u2500${ANSI.reset} ${ANSI.red}ERROR (${message.slice(0, 120)})${ANSI.reset}${newline}`;
 							};
 
 							const fetchCodexQuotaSnapshot = async (params: {
