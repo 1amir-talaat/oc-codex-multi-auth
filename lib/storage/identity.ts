@@ -282,7 +282,7 @@ function deduplicateAccountsByKey<T extends AccountLike>(accounts: T[]): T[] {
   for (let i = 0; i < working.length; i += 1) {
     const account = working[i];
     if (!account) continue;
-    const key = toAccountIdentityKey(account);
+    const key = getWorkspaceIdentityKey(account);
     if (!key) continue;
 
     const existingIndex = keyToIndex.get(key);

@@ -520,14 +520,16 @@ describe("storage", () => {
       await importAccounts(exportPath);
 
       const loaded = await loadAccounts();
-      expect(loaded?.accounts).toHaveLength(2);
+      expect(loaded?.accounts).toHaveLength(3);
 
-      const org1 = loaded?.accounts.find((account) => account.organizationId === "org-1");
-      expect(org1?.accountId).toBe("workspace-c");
-      expect(org1?.refreshToken).toBe("refresh-new");
-      expect(loaded?.activeIndex).toBe(1);
-      expect(loaded?.activeIndexByFamily?.codex).toBe(1);
-      expect(loaded?.activeIndexByFamily?.["gpt-5.1"]).toBe(1);
+      const org1WorkspaceC = loaded?.accounts.find(
+        (account) => account.organizationId === "org-1" && account.accountId === "workspace-c",
+      );
+      expect(org1WorkspaceC?.refreshToken).toBe("refresh-new");
+      const org1WorkspaceA = loaded?.accounts.find(
+        (account) => account.organizationId === "org-1" && account.accountId === "workspace-a",
+      );
+      expect(org1WorkspaceA?.refreshToken).toBe("refresh-old");
     });
 
     it("preserves same refresh token across different organizationId values during import", async () => {
@@ -1382,12 +1384,11 @@ describe("storage", () => {
       };
 
       const result = normalizeAccountStorage(data);
-      expect(result?.accounts).toHaveLength(2);
+      expect(result?.accounts).toHaveLength(3);
       const organizationIds = result?.accounts
         .map((account) => account.organizationId)
         .filter((organizationId): organizationId is string => typeof organizationId === "string");
       expect(new Set(organizationIds)).toEqual(new Set(["org-1", "org-2"]));
-      expect(result?.accounts.every((account) => account.accountId === "workspace-b")).toBe(true);
     });
 
     it("preserves workspace variants when organizationId differs despite same accountId and refreshToken", () => {
